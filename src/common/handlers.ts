@@ -9,6 +9,15 @@ import { VlOverWSHandler } from "@vless";
 import { TrOverWSHandler } from "@trojan";
 import JSZip from "jszip";
 import { HttpStatus, respond } from "@common";
+import {
+    createTrojanPassword,
+    createUUID,
+    findUserBySubId,
+    getUserStatus,
+    getUsers,
+    normalizeUser,
+    saveUsers
+} from "@users";
 
 export async function handleWebsocket(request: Request): Promise<Response> {
     const { pathName } = globalThis.globalConfig;
@@ -67,6 +76,12 @@ export async function handlePanel(request: Request, env: Env): Promise<Response>
         case '/panel/get-warp-configs':
             return await getWarpConfigs(request, env);
 
+        case '/panel/users':
+            return await handleUsers(request, env);
+
+        case '/panel/users/reset-usage':
+            return await resetUserUsage(request, env);
+
         default:
             return await fallback(request);
     }
@@ -108,11 +123,35 @@ export async function handleSubscriptions(request: Request, env: Env): Promise<R
     await setSettings(request, env);
     const {
         globalConfig: { pathName },
-        httpConfig: { client, subPath }
+        httpConfig: { client }
     } = globalThis;
 
-    switch (pathName) {
-        case `/sub/normal/${subPath}`:
+    const match = pathName.match(/^\/sub\/(normal|fragment|warp|warp-pro)\/([^/]+)$/);
+    if (!match) {
+        return await fallback(request);
+    }
+
+    const [, subType, subId] = match;
+    const user = await findUserBySubId(env, decodeURIComponent(subId));
+
+    if (!user) {
+        return respond(false, HttpStatus.NOT_FOUND, 'Subscription not found.');
+    }
+
+    const status = getUserStatus(user);
+    if (!status.active) {
+        return respond(false, HttpStatus.FORBIDDEN, `Subscription is unavailable: ${status.reason}`);
+    }
+
+    globalThis.globalConfig = {
+        ...globalThis.globalConfig,
+        activeUserUUID: user.uuid,
+        activeTrPass: user.trPassword,
+        activeUserId: user.id
+    };
+
+    switch (subType) {
+        case 'normal':
             switch (client) {
                 case 'xray':
                     return await getXrCustomConfigs(false);
@@ -126,8 +165,9 @@ export async function handleSubscriptions(request: Request, env: Env): Promise<R
                 default:
                     break;
             }
+            break;
 
-        case `/sub/fragment/${subPath}`:
+        case 'fragment':
             switch (client) {
                 case 'xray':
                     return await getXrCustomConfigs(true);
@@ -138,8 +178,9 @@ export async function handleSubscriptions(request: Request, env: Env): Promise<R
                 default:
                     break;
             }
+            break;
 
-        case `/sub/warp/${subPath}`:
+        case 'warp':
             switch (client) {
                 case 'xray':
                     return await getXrWarpConfigs(request, env, false, false);
@@ -153,8 +194,9 @@ export async function handleSubscriptions(request: Request, env: Env): Promise<R
                 default:
                     break;
             }
+            break;
 
-        case `/sub/warp-pro/${subPath}`:
+        case 'warp-pro':
             switch (client) {
                 case 'xray':
                     return await getXrWarpConfigs(request, env, true, false);
@@ -168,10 +210,10 @@ export async function handleSubscriptions(request: Request, env: Env): Promise<R
                 default:
                     break;
             }
-
-        default:
-            return await fallback(request);
+            break;
     }
+
+    return await fallback(request);
 }
 
 async function updateSettings(request: Request, env: Env): Promise<Response> {
@@ -220,12 +262,12 @@ async function getSettings(request: Request, env: Env): Promise<Response> {
     }
 
     const dataset = await getDataset(request, env);
-    const { subPath } = globalThis.httpConfig;
+    const users = await getUsers(env);
 
     const data = {
         proxySettings: dataset.settings,
         isPassSet,
-        subPath: subPath
+        users
     };
 
     return respond(true, HttpStatus.OK, undefined, data);
@@ -407,6 +449,94 @@ async function updateWarpConfigs(request: Request, env: Env): Promise<Response> 
     return respond(false, HttpStatus.METHOD_NOT_ALLOWED, 'Method not allowd.');
 }
 
+
+async function handleUsers(request: Request, env: Env): Promise<Response> {
+    const auth = await Authenticate(request, env);
+
+    if (!auth) {
+        return respond(false, HttpStatus.UNAUTHORIZED, 'Unauthorized or expired session.');
+    }
+
+    const users = await getUsers(env);
+
+    if (request.method === 'GET') {
+        return respond(true, HttpStatus.OK, '', users);
+    }
+
+    if (request.method === 'POST') {
+        const body = await request.json() as Partial<PanelUser>;
+        const normalized = normalizeUser({
+            id: crypto.randomUUID(),
+            name: body.name ?? `user-${users.length + 1}`,
+            uuid: body.uuid ?? createUUID(),
+            subId: body.subId ?? crypto.randomUUID(),
+            trPassword: body.trPassword ?? createTrojanPassword(),
+            dataLimitGB: body.dataLimitGB ?? 0,
+            dataUsedBytes: body.dataUsedBytes ?? 0,
+            expireAt: body.expireAt ?? 0,
+            enabled: body.enabled ?? true,
+            createdAt: Date.now()
+        }, users.length);
+
+        users.push(normalized);
+        await saveUsers(env, users);
+        return respond(true, HttpStatus.OK, 'User created successfully.', normalized);
+    }
+
+    if (request.method === 'PUT') {
+        const body = await request.json() as Partial<PanelUser> & { id: string };
+        const index = users.findIndex(user => user.id === body.id);
+
+        if (index === -1) {
+            return respond(false, HttpStatus.NOT_FOUND, 'User not found.');
+        }
+
+        const current = users[index];
+        users[index] = normalizeUser({ ...current, ...body, createdAt: current.createdAt }, index);
+        await saveUsers(env, users);
+        return respond(true, HttpStatus.OK, 'User updated successfully.', users[index]);
+    }
+
+    if (request.method === 'DELETE') {
+        const body = await request.json() as { id: string };
+        const filtered = users.filter(user => user.id !== body.id);
+
+        if (filtered.length === users.length) {
+            return respond(false, HttpStatus.NOT_FOUND, 'User not found.');
+        }
+
+        await saveUsers(env, filtered);
+        return respond(true, HttpStatus.OK, 'User removed successfully.');
+    }
+
+    return respond(false, HttpStatus.METHOD_NOT_ALLOWED, 'Method not allowed.');
+}
+
+async function resetUserUsage(request: Request, env: Env): Promise<Response> {
+    if (request.method !== 'POST') {
+        return respond(false, HttpStatus.METHOD_NOT_ALLOWED, 'Method not allowed.');
+    }
+
+    const auth = await Authenticate(request, env);
+    if (!auth) {
+        return respond(false, HttpStatus.UNAUTHORIZED, 'Unauthorized or expired session.');
+    }
+
+    const body = await request.json() as { id: string };
+    const users = await getUsers(env);
+    const target = users.find(user => user.id === body.id);
+
+    if (!target) {
+        return respond(false, HttpStatus.NOT_FOUND, 'User not found.');
+    }
+
+    target.dataUsedBytes = 0;
+    target.updatedAt = Date.now();
+    await saveUsers(env, users);
+
+    return respond(true, HttpStatus.OK, 'Usage reset successfully.', target);
+}
+
 async function decompressHtml(content: string, asString: boolean): Promise<string | ReadableStream<Uint8Array>> {
     const bytes = Uint8Array.from(atob(content), c => c.charCodeAt(0));
     const stream = new Blob([bytes]).stream().pipeThrough(new DecompressionStream('gzip'));
@@ -422,11 +552,25 @@ async function decompressHtml(content: string, asString: boolean): Promise<strin
 
 export async function handleDoH(request: Request): Promise<Response> {
     const url = new URL(request.url);
-    const { subPath } = globalThis.httpConfig;
     const { dohURL } = globalThis.globalConfig;
 
-    if (url.pathname !== `/dns-query/${subPath}`) {
+    const match = url.pathname.match(/^\/dns-query\/([^/]+)$/);
+    if (!match) {
         return fallback(request);
+    }
+
+    if (!globalThis.runtimeKV) {
+        return new Response('KV is unavailable.', { status: HttpStatus.INTERNAL_SERVER_ERROR });
+    }
+
+    const user = await findUserBySubId({ kv: globalThis.runtimeKV } as Env, decodeURIComponent(match[1]));
+    if (!user) {
+        return new Response('Subscription not found.', { status: HttpStatus.NOT_FOUND });
+    }
+
+    const status = getUserStatus(user);
+    if (!status.active) {
+        return new Response(`Subscription is unavailable: ${status.reason}`, { status: HttpStatus.FORBIDDEN });
     }
 
     const targetURL = new URL(dohURL);

@@ -53,7 +53,7 @@ export function buildWebsocketOutbound(
 ): VlessOutbound | TrojanOutbound | null {
     const {
         dict: { _VL_, _TR_ },
-        globalConfig: { userID, TrPass },
+        globalConfig: { userID, TrPass, activeUserUUID, activeTrPass },
         settings: { fingerprint, enableTFO, enableIPv6, enableECH, echConfig }
     } = globalThis;
 
@@ -65,12 +65,12 @@ export function buildWebsocketOutbound(
     const transport = buildTransport("ws", undefined, generateWsPath(protocol), host, undefined, 2560);
 
     if (protocol === _VL_) return buildOutbound<VlessOutbound>(remark, protocol, address, port, enableIPv6, enableTFO, tls, transport, {
-        "uuid": userID,
+        "uuid": activeUserUUID || userID,
         "packet-encoding": ""
     });
 
     return buildOutbound<TrojanOutbound>(remark, protocol, address, port, enableIPv6, enableTFO, tls, transport, {
-        "password": TrPass
+        "password": activeTrPass || TrPass
     });
 }
 

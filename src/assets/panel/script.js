@@ -16,6 +16,8 @@ const [
 
 const defaultHttpsPorts = [443, 8443, 2053, 2083, 2087, 2096];
 const defaultHttpPorts = [80, 8080, 8880, 2052, 2082, 2086, 2095];
+globalThis.panelUsers = [];
+globalThis.selectedUserId = '';
 
 fetch('/panel/settings')
     .then(async response => response.json())
@@ -31,9 +33,11 @@ fetch('/panel/settings')
             throw new Error(`status ${status} - ${message}`);
         }
 
-        const { subPath, proxySettings } = body;
-        globalThis.subPath = encodeURIComponent(subPath);
+        const { proxySettings, users } = body;
+        globalThis.panelUsers = users || [];
+        globalThis.selectedUserId = globalThis.panelUsers[0]?.id || "";
         initiatePanel(proxySettings);
+        renderUsers();
     })
     .catch(error => console.error("Data query error:", error.message || error))
     .finally(() => {
@@ -79,7 +83,7 @@ function initiatePanel(proxySettings) {
 }
 
 function populatePanel(proxySettings) {
-    document.getElementById("doh").textContent = `${window.origin}/dns-query/${decodeURIComponent(globalThis.subPath)}`;
+    updateDoHPreview();
     selectElements.forEach(elm => elm.value = proxySettings[elm.id]);
     checkboxElements.forEach(elm => elm.checked = proxySettings[elm.id]);
     inputElements.forEach(elm => elm.value = proxySettings[elm.id] || "");
@@ -220,8 +224,15 @@ function downloadWarpConfigs(isAmnezia) {
 }
 
 function generateSubUrl(path, app, tag, singboxType) {
+    const user = getSelectedUser();
+
+    if (!user) {
+        alert("⛔ ابتدا یک کاربر ایجاد/انتخاب کنید.");
+        return "";
+    }
+
     const url = new URL(window.location.href);
-    url.pathname = `/sub/${path}/${globalThis.subPath}`;
+    url.pathname = `/sub/${path}/${encodeURIComponent(user.subId)}`;
     app && url.searchParams.append('app', app);
 
     if (tag) {
@@ -235,11 +246,12 @@ function generateSubUrl(path, app, tag, singboxType) {
 
 function subURL(path, app, tag, singboxType) {
     const url = generateSubUrl(path, app, tag, singboxType);
-    copyToClipboard(url);
+    if (url) copyToClipboard(url);
 }
 
 async function dlURL(path, app) {
     const url = generateSubUrl(path, app);
+    if (!url) return;
 
     try {
         const response = await fetch(url);
@@ -294,9 +306,10 @@ async function uploadSettings(event) {
 }
 
 function openQR(path, app, tag, title, singboxType) {
+    const url = generateSubUrl(path, app, tag, singboxType);
+    if (!url) return;
     const qrModal = document.getElementById('qrModal');
     const qrcodeContainer = document.getElementById('qrcode-container');
-    const url = generateSubUrl(path, app, tag, singboxType);
     let qrcodeTitle = document.getElementById("qrcodeTitle");
     qrcodeTitle.textContent = title;
     qrModal.style.display = "block";
@@ -1263,4 +1276,164 @@ function renderUdpNoiseBlock(xrayUdpNoises) {
     });
 
     globalThis.xrayNoiseCount = xrayUdpNoises.length;
+}
+
+function getSelectedUser() {
+    return globalThis.panelUsers.find(user => user.id === globalThis.selectedUserId) || globalThis.panelUsers[0];
+}
+
+function updateDoHPreview() {
+    const user = getSelectedUser();
+    document.getElementById("doh").textContent = user
+        ? `${window.origin}/dns-query/${encodeURIComponent(user.subId)}`
+        : `${window.origin}/dns-query/<subscription-id>`;
+}
+
+function renderUsers() {
+    const select = document.getElementById('sub-user-select');
+    const tableBody = document.getElementById('users-table-body');
+    if (!select || !tableBody) return;
+
+    select.innerHTML = '';
+    globalThis.panelUsers.forEach(user => {
+        const option = document.createElement('option');
+        option.value = user.id;
+        option.textContent = `${user.name} (${user.subId})`;
+        select.appendChild(option);
+    });
+
+    if (globalThis.selectedUserId) select.value = globalThis.selectedUserId;
+    updateDoHPreview();
+
+    tableBody.innerHTML = '';
+    globalThis.panelUsers.forEach(user => {
+        const limitText = user.dataLimitGB > 0 ? `${user.dataLimitGB} GB` : '∞';
+        const usedGB = (user.dataUsedBytes / (1024 ** 3)).toFixed(2);
+        const expText = user.expireAt > 0 ? new Date(user.expireAt).toLocaleDateString() : '∞';
+
+        const tr = document.createElement('tr');
+        tr.innerHTML = `
+            <td>${user.name}</td>
+            <td>${user.subId}</td>
+            <td>${limitText}</td>
+            <td>${usedGB} GB</td>
+            <td>${expText}</td>
+            <td>${user.enabled ? '✅' : '⛔'}</td>
+            <td>
+                <button type="button" onclick="editUser('${user.id}')">Edit</button>
+                <button type="button" onclick="resetUserUsage('${user.id}')">Reset</button>
+                <button type="button" onclick="deleteUser('${user.id}')">Delete</button>
+            </td>
+        `;
+        tableBody.appendChild(tr);
+    });
+}
+
+function handleUserSelect(id) {
+    globalThis.selectedUserId = id;
+    updateDoHPreview();
+}
+
+async function saveUserForm(event) {
+    event.preventDefault();
+    const form = document.getElementById('userForm');
+    const id = form.dataset.userId || '';
+
+    const payload = {
+        id,
+        name: document.getElementById('userName').value.trim(),
+        uuid: document.getElementById('userUUID').value.trim(),
+        subId: document.getElementById('userSubId').value.trim(),
+        trPassword: document.getElementById('userTrPass').value.trim(),
+        dataLimitGB: Number(document.getElementById('userDataLimit').value || 0),
+        expireAt: document.getElementById('userExpireAt').value
+            ? new Date(document.getElementById('userExpireAt').value).getTime()
+            : 0,
+        enabled: document.getElementById('userEnabled').checked
+    };
+
+    const method = id ? 'PUT' : 'POST';
+    if (!id) delete payload.id;
+
+    const response = await fetch('/panel/users', {
+        method,
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+    });
+
+    const { success, body, message } = await response.json();
+    if (!success) return alert(`⛔ ${message}`);
+
+    if (method === 'POST') globalThis.panelUsers.push(body);
+    else globalThis.panelUsers = globalThis.panelUsers.map(user => user.id === body.id ? body : user);
+
+    closeUserModal();
+    renderUsers();
+}
+
+function openCreateUser() {
+    const form = document.getElementById('userForm');
+    form.dataset.userId = '';
+    form.reset();
+    document.getElementById('userEnabled').checked = true;
+    document.getElementById('userModalTitle').textContent = 'Create user';
+    document.getElementById('userModal').style.display = 'block';
+}
+
+function editUser(id) {
+    const user = globalThis.panelUsers.find(item => item.id === id);
+    if (!user) return;
+
+    const form = document.getElementById('userForm');
+    form.dataset.userId = user.id;
+    document.getElementById('userName').value = user.name;
+    document.getElementById('userUUID').value = user.uuid;
+    document.getElementById('userSubId').value = user.subId;
+    document.getElementById('userTrPass').value = user.trPassword;
+    document.getElementById('userDataLimit').value = user.dataLimitGB;
+    document.getElementById('userExpireAt').value = user.expireAt ? new Date(user.expireAt).toISOString().slice(0, 16) : '';
+    document.getElementById('userEnabled').checked = user.enabled;
+
+    document.getElementById('userModalTitle').textContent = 'Edit user';
+    document.getElementById('userModal').style.display = 'block';
+}
+
+function closeUserModal() {
+    document.getElementById('userModal').style.display = 'none';
+}
+
+async function deleteUser(id) {
+    if (!confirm('Delete this user?')) return;
+
+    const response = await fetch('/panel/users', {
+        method: 'DELETE',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id })
+    });
+
+    const { success, message } = await response.json();
+    if (!success) return alert(`⛔ ${message}`);
+
+    globalThis.panelUsers = globalThis.panelUsers.filter(user => user.id !== id);
+    if (!globalThis.panelUsers.find(user => user.id === globalThis.selectedUserId)) {
+        globalThis.selectedUserId = globalThis.panelUsers[0]?.id || '';
+    }
+    renderUsers();
+}
+
+async function resetUserUsage(id) {
+    const response = await fetch('/panel/users/reset-usage', {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id })
+    });
+
+    const { success, body, message } = await response.json();
+    if (!success) return alert(`⛔ ${message}`);
+
+    globalThis.panelUsers = globalThis.panelUsers.map(user => user.id === body.id ? body : user);
+    renderUsers();
 }

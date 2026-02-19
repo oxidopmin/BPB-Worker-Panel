@@ -612,6 +612,30 @@
             </div>
         </form>
     </div>
+    
+    <div class="form-container container">
+        <h2><span class="material-symbols-rounded">group</span> Users & Limits</h2>
+        <div class="form-control">
+            <label for="sub-user-select">👤 Active subscription user</label>
+            <div>
+                <select id="sub-user-select" onchange="handleUserSelect(this.value)"></select>
+            </div>
+        </div>
+        <div class="form-control">
+            <button type="button" class="button" onclick="openCreateUser()">Add user</button>
+        </div>
+        <div class="table-container">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Name</th><th>Sub ID</th><th>Limit</th><th>Used</th><th>Expire</th><th>Status</th><th>Actions</th>
+                    </tr>
+                </thead>
+                <tbody id="users-table-body"></tbody>
+            </table>
+        </div>
+    </div>
+
     <div class="form-container container">
         <h2><span class="material-symbols-rounded">share</span> Subscriptions</h2>
         <details>
@@ -1048,6 +1072,24 @@
         </div>
     </div>
     <div class="form-container container">
+        
+    <div id="userModal" class="modal">
+        <div class="modal-content">
+            <span class="close" onclick="closeUserModal()">&times;</span>
+            <h3 id="userModalTitle">Create user</h3>
+            <form id="userForm" onsubmit="saveUserForm(event)">
+                <div class="form-control"><label for="userName">Name</label><div><input id="userName" required></div></div>
+                <div class="form-control"><label for="userUUID">UUID</label><div><input id="userUUID" required></div></div>
+                <div class="form-control"><label for="userSubId">Subscription ID</label><div><input id="userSubId" required></div></div>
+                <div class="form-control"><label for="userTrPass">Trojan password</label><div><input id="userTrPass" required></div></div>
+                <div class="form-control"><label for="userDataLimit">Data limit (GB, 0=unlimited)</label><div><input type="number" id="userDataLimit" min="0"></div></div>
+                <div class="form-control"><label for="userExpireAt">Expire at</label><div><input type="datetime-local" id="userExpireAt"></div></div>
+                <div class="form-control"><label for="userEnabled">Enabled</label><div><input type="checkbox" id="userEnabled" checked></div></div>
+                <button class="button" type="submit">Save user</button>
+            </form>
+        </div>
+    </div>
+
         <div id="resetPassModal" class="modal">
             <div class="modal-content">
                 <span class="close" id="closeResetPass" onclick="closeResetPass()">&times;</span>

@@ -1,5 +1,6 @@
 import { connect } from 'cloudflare:sockets';
 import { isIPv4, parseHostPort, resolveDNS } from '@utils';
+import { addUserUsage } from '@users';
 
 export const WS_READY_STATE_OPEN = 1;
 const WS_READY_STATE_CLOSING = 2;
@@ -108,6 +109,12 @@ async function remoteSocketToWS(
                 vlHeader = null;
             } else {
                 webSocket.send(chunk);
+            }
+
+            const { activeUserId } = globalThis.globalConfig;
+            if (activeUserId && globalThis.runtimeKV) {
+                const size = chunk instanceof ArrayBuffer ? chunk.byteLength : (chunk as Uint8Array).byteLength;
+                addUserUsage({ kv: globalThis.runtimeKV } as Env, activeUserId, size).catch(console.error);
             }
         },
         close() {

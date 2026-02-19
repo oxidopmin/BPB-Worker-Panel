@@ -3,6 +3,7 @@ import {
     makeReadableWebSocketStream,
     safeCloseTcpSocket
 } from './common';
+import { findUserByTrojanHash, getUserStatus } from '@users';
 
 export async function TrOverWSHandler(request: Request): Promise<Response> {
     const webSocketPair = new WebSocketPair();
@@ -41,7 +42,7 @@ export async function TrOverWSHandler(request: Request): Promise<Response> {
                 portRemote = 443,
                 addressRemote = "",
                 rawClientData,
-            } = parseTrHeader(chunk);
+            } = await parseTrHeader(chunk);
 
             address = addressRemote;
             portWithRandomLog = `${portRemote}--${Math.random()} tcp`;
@@ -81,7 +82,7 @@ export async function TrOverWSHandler(request: Request): Promise<Response> {
     });
 }
 
-function parseTrHeader(buffer: ArrayBuffer) {
+async function parseTrHeader(buffer: ArrayBuffer) {
     if (buffer.byteLength < 56) {
         return {
             hasError: true,
@@ -101,14 +102,35 @@ function parseTrHeader(buffer: ArrayBuffer) {
     }
 
     const password = new TextDecoder().decode(buffer.slice(0, crLfIndex));
-    const { TrPass } = globalThis.globalConfig;
+    const runtimeKV = globalThis.runtimeKV;
 
-    if (password !== sha224(TrPass!)) {
+    if (!runtimeKV) {
+        return { hasError: true, message: 'KV is unavailable' };
+    }
+
+    const user = await findUserByTrojanHash({ kv: runtimeKV } as Env, password);
+
+    if (!user) {
         return {
             hasError: true,
             message: "invalid password",
         };
     }
+
+    const status = getUserStatus(user);
+    if (!status.active) {
+        return {
+            hasError: true,
+            message: `user is unavailable: ${status.reason}`
+        };
+    }
+
+    globalThis.globalConfig = {
+        ...globalThis.globalConfig,
+        activeUserUUID: user.uuid,
+        activeTrPass: user.trPassword,
+        activeUserId: user.id
+    };
 
     const socks5DataBuffer = buffer.slice(crLfIndex + 2);
     if (socks5DataBuffer.byteLength < 6) {

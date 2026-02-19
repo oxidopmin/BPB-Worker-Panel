@@ -1,4 +1,5 @@
 import { isValidUUID } from '@common';
+import { findUserByUUID, getUserStatus } from '@users';
 import {
     safeCloseTcpSocket,
     handleTCPOutBound,
@@ -38,7 +39,6 @@ export async function VlOverWSHandler(request: Request): Promise<Response> {
                 return;
             }
 
-            const { userID } = globalThis.globalConfig;
             const {
                 hasError,
                 message,
@@ -47,7 +47,7 @@ export async function VlOverWSHandler(request: Request): Promise<Response> {
                 rawDataIndex,
                 VLVersion = new Uint8Array([0, 0]),
                 isUDP,
-            } = parseVlHeader(chunk, userID!);
+            } = await parseVlHeader(chunk);
 
             address = addressRemote;
             portWithRandomLog = `${portRemote}--${Math.random()} ${isUDP ? "udp " : "tcp "} `;
@@ -102,7 +102,7 @@ export async function VlOverWSHandler(request: Request): Promise<Response> {
     });
 }
 
-function parseVlHeader(VLBuffer: ArrayBuffer, userID: string) {
+async function parseVlHeader(VLBuffer: ArrayBuffer) {
     if (VLBuffer.byteLength < 24) {
         return {
             hasError: true,
@@ -113,14 +113,35 @@ function parseVlHeader(VLBuffer: ArrayBuffer, userID: string) {
     const version = new Uint8Array(VLBuffer.slice(0, 1));
     const slicedBuffer = new Uint8Array(VLBuffer.slice(1, 17));
     const slicedBufferString = stringify(slicedBuffer);
-    const isValidUser = slicedBufferString === userID;
 
-    if (!isValidUser) {
+    const runtimeKV = globalThis.runtimeKV;
+    if (!runtimeKV) {
+        return { hasError: true, message: 'KV is unavailable' };
+    }
+
+    const user = await findUserByUUID({ kv: runtimeKV } as Env, slicedBufferString);
+
+    if (!user) {
         return {
             hasError: true,
             message: "invalid user",
         };
     }
+
+    const status = getUserStatus(user);
+    if (!status.active) {
+        return {
+            hasError: true,
+            message: `user is unavailable: ${status.reason}`
+        };
+    }
+
+    globalThis.globalConfig = {
+        ...globalThis.globalConfig,
+        activeUserUUID: user.uuid,
+        activeTrPass: user.trPassword,
+        activeUserId: user.id
+    };
 
     const optLength = new Uint8Array(VLBuffer.slice(17, 18))[0];
     const command = new Uint8Array(VLBuffer.slice(18 + optLength, 18 + optLength + 1))[0];
@@ -188,43 +209,11 @@ function parseVlHeader(VLBuffer: ArrayBuffer, userID: string) {
     return {
         hasError: false,
         addressRemote: addressValue,
-        addressType,
         portRemote,
         rawDataIndex: addressValueIndex + addressLength,
         VLVersion: version,
         isUDP,
     };
-}
-
-function unsafeStringify(arr: Uint8Array, offset = 0) {
-    const byteToHex: string[] = [];
-
-    for (let i = 0; i < 256; ++i) {
-        byteToHex.push((i + 256).toString(16).slice(1));
-    }
-
-    return (
-        byteToHex[arr[offset + 0]] +
-        byteToHex[arr[offset + 1]] +
-        byteToHex[arr[offset + 2]] +
-        byteToHex[arr[offset + 3]] +
-        "-" +
-        byteToHex[arr[offset + 4]] +
-        byteToHex[arr[offset + 5]] +
-        "-" +
-        byteToHex[arr[offset + 6]] +
-        byteToHex[arr[offset + 7]] +
-        "-" +
-        byteToHex[arr[offset + 8]] +
-        byteToHex[arr[offset + 9]] +
-        "-" +
-        byteToHex[arr[offset + 10]] +
-        byteToHex[arr[offset + 11]] +
-        byteToHex[arr[offset + 12]] +
-        byteToHex[arr[offset + 13]] +
-        byteToHex[arr[offset + 14]] +
-        byteToHex[arr[offset + 15]]
-    ).toLowerCase();
 }
 
 function stringify(arr: Uint8Array, offset = 0) {
@@ -237,6 +226,33 @@ function stringify(arr: Uint8Array, offset = 0) {
     return uuid;
 }
 
+
+
+function unsafeStringify(arr: Uint8Array, offset = 0) {
+    const byteToHex: string[] = [];
+    for (let i = 0; i < 256; ++i) {
+        byteToHex.push((i + 0x100).toString(16).slice(1));
+    }
+
+    return (
+        byteToHex[arr[offset + 0]] +
+        byteToHex[arr[offset + 1]] +
+        byteToHex[arr[offset + 2]] +
+        byteToHex[arr[offset + 3]] + '-' +
+        byteToHex[arr[offset + 4]] +
+        byteToHex[arr[offset + 5]] + '-' +
+        byteToHex[arr[offset + 6]] +
+        byteToHex[arr[offset + 7]] + '-' +
+        byteToHex[arr[offset + 8]] +
+        byteToHex[arr[offset + 9]] + '-' +
+        byteToHex[arr[offset + 10]] +
+        byteToHex[arr[offset + 11]] +
+        byteToHex[arr[offset + 12]] +
+        byteToHex[arr[offset + 13]] +
+        byteToHex[arr[offset + 14]] +
+        byteToHex[arr[offset + 15]]
+    ).toLowerCase();
+}
 async function handleUDPOutBound(webSocket: WebSocket, VLResponseHeader: Uint8Array<ArrayBuffer>, log: Function) {
     let isVLHeaderSent = false;
 
