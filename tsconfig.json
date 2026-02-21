@@ -20,6 +20,7 @@
             "@handlers": ["common/handlers"],
             "@init": ["common/init"],
             "@common": ["common/common"],
+            "@users": ["users"],
             "@vless": ["protocols/websocket/vless"],
             "@trojan": ["protocols/websocket/trojan"],
             "@warp": ["protocols/warp"]

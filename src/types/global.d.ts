@@ -5,6 +5,9 @@ declare global {
         readonly pathName: string;
         readonly fallbackDomain: string;
         readonly dohURL: string;
+        readonly activeUserUUID?: string;
+        readonly activeTrPass?: string;
+        readonly activeUserId?: string;
     }
 
     interface HttpConfig {
@@ -35,6 +38,20 @@ declare global {
         readonly FALLBACK: string;
         readonly DOH_URL: string;
         readonly kv: KVNamespace;
+    }
+
+    interface PanelUser {
+        id: string;
+        name: string;
+        uuid: string;
+        subId: string;
+        trPassword: string;
+        dataLimitGB: number;
+        dataUsedBytes: number;
+        expireAt: number;
+        createdAt: number;
+        updatedAt: number;
+        enabled: boolean;
     }
 
     interface WarpAccount {
@@ -144,6 +161,8 @@ declare global {
     var globalConfig: GlobalConfig;
     var httpConfig: HttpConfig;
     var wsConfig: WsConfig;
+    var runtimeKV: KVNamespace | undefined;
+
     var dict: {
         readonly _VL_: string;
         readonly _VL_CAP_: string;

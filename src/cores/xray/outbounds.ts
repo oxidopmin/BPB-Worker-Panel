@@ -127,7 +127,7 @@ export function buildWebsocketOutbound(
             enableECH,
             echConfig
         },
-        globalConfig: { userID, TrPass },
+        globalConfig: { userID, TrPass, activeUserUUID, activeTrPass },
         dict: { _VL_ }
     } = globalThis;
 
@@ -157,7 +157,7 @@ export function buildWebsocketOutbound(
             port,
             users: [
                 {
-                    id: userID,
+                    id: activeUserUUID || userID,
                     encryption: "none"
                 }
             ]
@@ -168,7 +168,7 @@ export function buildWebsocketOutbound(
         servers: [{
             address,
             port,
-            password: TrPass
+            password: activeTrPass || TrPass
         }]
     }, streamSettings);
 }

@@ -109,6 +109,7 @@ export async function setSettings(request: Request, env: Env) {
 }
 
 export function init(request: Request, env: Env) {
+    globalThis.runtimeKV = env.kv;
     const { pathname } = new URL(request.url);
     const { UUID, TR_PASS, FALLBACK, DOH_URL } = env;
 
@@ -154,6 +155,13 @@ export function initHttp(request: Request, env: any) {
         hostName: hostname,
         client: decodeURIComponent(searchParams.get('app') ?? ''),
         urlOrigin: origin,
-        subPath: SUB_PATH || UUID,
+        subPath: SUB_PATH || "",
+    };
+
+    globalThis.globalConfig = {
+        ...globalThis.globalConfig,
+        activeUserUUID: undefined,
+        activeTrPass: undefined,
+        activeUserId: undefined
     };
 }
